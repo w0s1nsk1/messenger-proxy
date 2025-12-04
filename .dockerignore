@@ -1,0 +1,6 @@
+node_modules
+npm-debug.log
+storage/state.json
+storage/error_screenshots
+.env
+.DS_Store
