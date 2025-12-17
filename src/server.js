@@ -130,7 +130,7 @@ async function ensureLoggedIn() {
 
   context = await browser.newContext();
   const page = await context.newPage();
-  console.log('Logging into Facebook with credentials.');c
+  console.log('Logging into Facebook with credentials.');
 
   try {
     await page.goto('https://m.facebook.com/', { waitUntil: 'networkidle' });
