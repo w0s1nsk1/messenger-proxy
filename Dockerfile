@@ -9,7 +9,6 @@ RUN npm ci --omit=dev
 
 # Copy application code
 COPY src ./src
-COPY message.html ./
 COPY storage ./storage
 
 ENV NODE_ENV=production
