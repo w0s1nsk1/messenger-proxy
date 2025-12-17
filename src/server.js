@@ -542,19 +542,37 @@ async function sendMessage(conversationName, messageText) {
       await clickConversation(page, target);
     }
 
-    const composerSelectors = ['textarea[name="body"]', 'div[role="textbox"]', 'div[aria-label="Wiadomość"]', 'div[contenteditable="true"]'];
+    const composerSelectors = [
+      'textarea[name="body"]',
+      'div[role="textbox"]',
+      'div[aria-label="Wiadomość"]',
+      'div[contenteditable="true"]'
+    ];
     let composer = null;
     for (const selector of composerSelectors) {
-      composer = await page.$(selector);
-      if (composer) break;
+      const loc = page.locator(selector).first();
+      if ((await loc.count()) === 0) continue;
+      try {
+        await loc.waitFor({ state: 'visible', timeout: 15000 });
+        await loc.scrollIntoViewIfNeeded();
+        try {
+          await loc.click({ timeout: 5000 });
+        } catch (clickErr) {
+          console.warn('Composer click intercepted, retrying with force', clickErr);
+          await loc.click({ timeout: 5000, force: true });
+        }
+        composer = loc;
+        break;
+      } catch {
+        continue;
+      }
     }
 
     if (!composer) {
       throw new Error('Composer not found');
     }
 
-    await composer.click();
-    const canFill = await composer.evaluate((node) => 'value' in node);
+    const canFill = await composer.evaluate((node) => node.isContentEditable || 'value' in node);
     if (canFill) {
       await composer.fill(messageText);
     } else {
@@ -579,7 +597,15 @@ async function sendMessage(conversationName, messageText) {
 
     console.log(`Sent message to "${conversationName}"`);
   } catch (err) {
-    console.error(`Failed to send message to "${conversationName}"`, err);
+    const screenshotPath = await captureFailureScreenshot(page, conversationName);
+    if (screenshotPath) {
+      console.error(
+        `Failed to send message to "${conversationName}" (screenshot saved to ${screenshotPath})`,
+        err
+      );
+    } else {
+      console.error(`Failed to send message to "${conversationName}"`, err);
+    }
   } finally {
     await page.close();
   }
