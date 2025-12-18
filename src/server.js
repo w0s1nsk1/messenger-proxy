@@ -623,6 +623,10 @@ async function sendMessage(conversationName, messageText) {
       // fallback: Enter often sends on m.facebook after focus
       await page.keyboard.press('Enter');
     }
+    // Wait briefly for send confirmation to reduce double-sends.
+    await page
+      .waitForSelector('text=/Wys[łl]ano|Sent/i', { timeout: 8000 })
+      .catch(() => null);
 
     screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
