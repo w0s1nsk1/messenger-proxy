@@ -624,9 +624,16 @@ async function sendMessage(conversationName, messageText) {
       await page.keyboard.press('Enter');
     }
     // Wait briefly for send confirmation to reduce double-sends.
-    await page
-      .waitForSelector('text=/Wys[łl]ano|Sent/i', { timeout: 8000 })
-      .catch(() => null);
+    const sendStateSelector = 'text=/Wys[łl]ano|Sent/i';
+    const sendingSelector = 'text=/Wys[łl]anie/i';
+    const sendState = await page.waitForSelector(`${sendStateSelector}, ${sendingSelector}`, { timeout: 8000 }).catch(() => null);
+    if (sendState) {
+      // If we caught the "sending" state, wait for it to disappear.
+      const text = await sendState.textContent().catch(() => '');
+      if (text && /Wys[łl]anie/i.test(text)) {
+        await sendState.waitForElementState('detached', { timeout: 5000 }).catch(() => null);
+      }
+    }
 
     screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
