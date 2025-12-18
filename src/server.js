@@ -185,30 +185,51 @@ async function runManualLogin() {
 async function maybeUnlockWithPin(page) {
   if (!messengerPin) return;
 
-  try {
-    const pinPrompt =
-      (await page.waitForSelector('text=/Wprowadź kod PIN/i', { timeout: 10000 }).catch(() => null));
-    
-    if (!pinPrompt) {
-      console.log('PIN prompt not detected.');
-      return;
-    } else {
-      console.log('PIN prompt detected, attempting to unlock.');
-    }
-  } catch {
-    return; // no prompt, continue silently
+  // The PIN prompt shows up as a dialog with multiple single-digit inputs.
+  const dialogHintSelectors = [
+    'text=/Wprowad.z kod PIN/i',
+    'text=/Enter your PIN/i',
+    '[role="dialog"] input[maxlength="1"]'
+  ];
+
+  let pinDialog = null;
+  for (const selector of dialogHintSelectors) {
+    pinDialog = await page.$(selector);
+    if (pinDialog) break;
   }
 
+  if (!pinDialog) {
+    // As a fallback, wait briefly to see if the prompt appears right after navigation.
+    for (const selector of dialogHintSelectors) {
+      pinDialog = await page.waitForSelector(selector, { timeout: 5000 }).catch(() => null);
+      if (pinDialog) break;
+    }
+  }
+
+  if (!pinDialog) {
+    console.log('PIN prompt not detected.');
+    return;
+  }
+
+  console.log('PIN prompt detected, attempting to unlock.');
+
   try {
-    const otacInput = await page.$('input[autocomplete="one-time-code"]');
-    if (otacInput) {
-      await otacInput.fill(messengerPin);
+    const pinInputs = await page.$$(
+      'input[autocomplete="one-time-code"], input[maxlength="1"][type="tel"], input[maxlength="1"][type="password"], input[aria-label*="PIN" i]'
+    );
+
+    if (pinInputs.length > 1) {
+      for (let i = 0; i < messengerPin.length && i < pinInputs.length; i += 1) {
+        await pinInputs[i].fill(messengerPin[i]);
+      }
+    } else if (pinInputs.length === 1) {
+      await pinInputs[0].fill(messengerPin);
     } else {
       await page.keyboard.type(messengerPin);
     }
 
     console.log('PIN prompt handled automatically.');
-    await page.waitForSelector('[role=dialog]', { timeout: 10000, state: 'detached' });
+    await page.waitForSelector('[role=dialog]', { timeout: 10000, state: 'detached' }).catch(() => null);
   } catch (err) {
     console.warn('Could not auto-fill PIN prompt', err);
   }
@@ -533,6 +554,7 @@ function resolveConversationTarget(value) {
 async function sendMessage(conversationName, messageText) {
   await ensureLoggedIn();
   const page = await context.newPage();
+  let screenshotPath = null;
 
   try {
     await navigateToMessages(page);
@@ -541,6 +563,7 @@ async function sendMessage(conversationName, messageText) {
     if (!alreadyThere) {
       await clickConversation(page, target);
     }
+    await maybeUnlockWithPin(page);
 
     const composerSelectors = [
       'textarea[name="body"]',
@@ -595,14 +618,14 @@ async function sendMessage(conversationName, messageText) {
       await page.keyboard.press('Enter');
     }
 
-    await captureScreenshot(page, conversationName);
+    screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
       console.log(`Sent message to "${conversationName}" (screenshot saved to ${screenshotPath})`);
     } else {
       console.log(`Sent message to "${conversationName}"`);
     }
   } catch (err) {
-    const screenshotPath = await captureScreenshot(page, conversationName);
+    screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
       console.error(
         `Failed to send message to "${conversationName}" (screenshot saved to ${screenshotPath})`,
@@ -627,6 +650,7 @@ async function readMessages(conversationName, limit = 5) {
     if (!alreadyThere) {
       await clickConversation(page, target);
     }
+    await maybeUnlockWithPin(page);
 
     await page.waitForTimeout(2000); // wait for messages to load
     const messages = await page.$$eval('div[role="row"]', (rows, lim) => {
