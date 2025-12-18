@@ -70,7 +70,7 @@ async function handleMessage(event) {
 let browser;
 let context;
 
-async function captureFailureScreenshot(page, conversationName) {
+async function captureScreenshot(page, conversationName) {
   if (!page) return null;
   try {
     fs.mkdirSync(errorScreenshotDir, { recursive: true });
@@ -597,7 +597,7 @@ async function sendMessage(conversationName, messageText) {
 
     console.log(`Sent message to "${conversationName}"`);
   } catch (err) {
-    const screenshotPath = await captureFailureScreenshot(page, conversationName);
+    const screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
       console.error(
         `Failed to send message to "${conversationName}" (screenshot saved to ${screenshotPath})`,
@@ -683,7 +683,7 @@ async function readMessages(conversationName, limit = 5) {
     );
     return filtered;
   } catch (err) {
-    const screenshotPath = await captureFailureScreenshot(page, conversationName);
+    const screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
       console.error(
         `Failed to read messages from "${conversationName}" (screenshot saved to ${screenshotPath})`,
