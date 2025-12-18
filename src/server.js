@@ -14,6 +14,7 @@ const fbEmail = process.env.FB_EMAIL;
 const fbPassword = process.env.FB_PASSWORD;
 const storageStatePath = process.env.STORAGE_STATE;
 const messengerPin = process.env.MESSENGER_PIN;
+let sendInProgress = false;
 const loginMode = (process.env.LOGIN_MODE || 'credentials').toLowerCase(); // 'credentials' | 'storage-only' | 'manual'
 const watchConversation = process.env.WATCH_CONVERSATION;
 const watchConversationId = process.env.WATCH_CONVERSATION_ID;
@@ -188,8 +189,10 @@ async function maybeUnlockWithPin(page) {
   // The PIN prompt shows up as a dialog with multiple single-digit inputs.
   const dialogHintSelectors = [
     'text=/Wprowad.z kod PIN/i',
+    'text=/kod PIN/i',
     'text=/Enter your PIN/i',
-    '[role="dialog"] input[maxlength="1"]'
+    '[role="dialog"] input[maxlength="1"]',
+    '[role="dialog"] >> text=/PIN/i'
   ];
 
   let pinDialog = null;
@@ -201,7 +204,7 @@ async function maybeUnlockWithPin(page) {
   if (!pinDialog) {
     // As a fallback, wait briefly to see if the prompt appears right after navigation.
     for (const selector of dialogHintSelectors) {
-      pinDialog = await page.waitForSelector(selector, { timeout: 5000 }).catch(() => null);
+      pinDialog = await page.waitForSelector(selector, { timeout: 8000 }).catch(() => null);
       if (pinDialog) break;
     }
   }
@@ -214,6 +217,8 @@ async function maybeUnlockWithPin(page) {
   console.log('PIN prompt detected, attempting to unlock.');
 
   try {
+    // Small delay to allow all PIN inputs to render before filling.
+    await page.waitForTimeout(300);
     const pinInputs = await page.$$(
       'input[autocomplete="one-time-code"], input[maxlength="1"][type="tel"], input[maxlength="1"][type="password"], input[aria-label*="PIN" i]'
     );
@@ -555,6 +560,7 @@ async function sendMessage(conversationName, messageText) {
   await ensureLoggedIn();
   const page = await context.newPage();
   let screenshotPath = null;
+  sendInProgress = true;
 
   try {
     await navigateToMessages(page);
@@ -635,6 +641,7 @@ async function sendMessage(conversationName, messageText) {
       console.error(`Failed to send message to "${conversationName}"`, err);
     }
   } finally {
+    sendInProgress = false;
     await page.close();
   }
 }
@@ -769,6 +776,10 @@ function start() {
       if (alreadyPolling) return;
       alreadyPolling = true;
       try {
+        if (sendInProgress) {
+          alreadyPolling = false;
+          return;
+        }
         const messages = await readMessages(watchTargetValue, watchLimit);
         if (!messages || !messages.length) {
           alreadyPolling = false;
