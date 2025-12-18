@@ -563,6 +563,7 @@ async function sendMessage(conversationName, messageText) {
   sendInProgress = true;
 
   try {
+    console.log(`[Send] Navigating to conversation "${conversationName}"`);
     await navigateToMessages(page);
     const target = resolveConversationTarget(conversationName);
     const alreadyThere = await isInConversation(page, target);
@@ -571,6 +572,7 @@ async function sendMessage(conversationName, messageText) {
     }
     await maybeUnlockWithPin(page);
 
+    console.log('[Send] Locating composer');
     const composerSelectors = [
       'textarea[name="body"]',
       'div[role="textbox"]',
@@ -607,6 +609,7 @@ async function sendMessage(conversationName, messageText) {
     } else {
       await page.keyboard.type(messageText);
     }
+    console.log('[Send] Message filled, looking for send control');
 
     const sendSelectors = ['button[type="submit"]', 'button[name="Send"]', 'button:has-text("Send")', 'a:has-text("Send")'];
     let sent = false;
@@ -626,6 +629,7 @@ async function sendMessage(conversationName, messageText) {
     // Wait briefly for send confirmation to reduce double-sends.
     const sendStateSelector = 'text=/Wys[łl]ano|Sent/i';
     const sendingSelector = 'text=/Wys[łl]anie/i';
+    console.log('[Send] Waiting for send status');
     const sendState = await page.waitForSelector(`${sendStateSelector}, ${sendingSelector}`, { timeout: 8000 }).catch(() => null);
     if (sendState) {
       // If we caught the "sending" state, wait for it to disappear.
