@@ -595,7 +595,12 @@ async function sendMessage(conversationName, messageText) {
       await page.keyboard.press('Enter');
     }
 
-    console.log(`Sent message to "${conversationName}"`);
+    await captureScreenshot(page, conversationName);
+    if (screenshotPath) {
+      console.log(`Sent message to "${conversationName}" (screenshot saved to ${screenshotPath})`);
+    } else {
+      console.log(`Sent message to "${conversationName}"`);
+    }
   } catch (err) {
     const screenshotPath = await captureScreenshot(page, conversationName);
     if (screenshotPath) {
