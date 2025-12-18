@@ -635,7 +635,9 @@ async function sendMessage(conversationName, messageText) {
       // If we caught the "sending" state, wait for it to disappear.
       const text = await sendState.textContent().catch(() => '');
       if (text && /Wys[łl]anie/i.test(text)) {
-        await sendState.waitForElementState('detached', { timeout: 5000 }).catch(() => null);
+        await page
+          .waitForSelector(sendingSelector, { state: 'detached', timeout: 15000 })
+          .catch(() => null);
       }
     }
 
