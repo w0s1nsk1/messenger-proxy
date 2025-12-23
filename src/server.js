@@ -786,18 +786,6 @@ async function readMessages(conversationName, limit = 5) {
         }
       });
 
-      // If earlier messages missed a sender but a newer one has it, assume they came from the same person.
-      let lastKnownSender = null;
-      for (let i = collected.length - 1; i >= 0; i -= 1) {
-        if (collected[i].sender) {
-          lastKnownSender = collected[i].sender;
-          continue;
-        }
-        if (lastKnownSender) {
-          collected[i].sender = lastKnownSender;
-        }
-      }
-
       // Fallback to legacy mobile selector if nothing found.
       if (!collected.length) {
         document.querySelectorAll('div[data-sigil="message-text"]').forEach((n) => {
