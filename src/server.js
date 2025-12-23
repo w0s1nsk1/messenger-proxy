@@ -7,7 +7,7 @@ const path = require('path');
 const { chromium } = require('playwright');
 const { persistMessages } = require('./sqlite');
 
-let alreadyPolling = false;
+const pollingState = new Map();
 const app = express();
 const port = process.env.PORT || 3000;
 const fbEmail = process.env.FB_EMAIL;
@@ -21,6 +21,7 @@ const watchConversationId = process.env.WATCH_CONVERSATION_ID;
 const watchPollMs = Number(process.env.WATCH_POLL_MS) || 10000;
 const watchLimit = Number(process.env.WATCH_LIMIT) || 10;
 const watchWebhookUrl = process.env.WATCH_WEBHOOK_URL;
+const watchDebugScreenshots = (process.env.WATCH_DEBUG_SCREENSHOTS || '').toLowerCase() === 'true';
 const errorScreenshotDir =
   process.env.ERROR_SCREENSHOT_DIR || path.resolve(process.cwd(), 'storage', 'screenshots');
 
@@ -82,6 +83,22 @@ async function captureScreenshot(page, conversationName) {
     return filePath;
   } catch (screenshotErr) {
     console.warn('Failed to capture error screenshot', screenshotErr);
+    return null;
+  }
+}
+
+async function captureWatchScreenshot(page, conversationName, label) {
+  if (!page) return null;
+  try {
+    fs.mkdirSync(errorScreenshotDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const safeName = (conversationName || 'conversation').replace(/[^a-z0-9-_]+/gi, '_');
+    const safeLabel = (label || 'watch').replace(/[^a-z0-9-_]+/gi, '_');
+    const filePath = path.join(errorScreenshotDir, `${safeName}-${safeLabel}-${timestamp}.png`);
+    await page.screenshot({ path: filePath, fullPage: true });
+    return filePath;
+  } catch (screenshotErr) {
+    console.warn('Failed to capture watch debug screenshot', screenshotErr);
     return null;
   }
 }
@@ -341,6 +358,7 @@ function filterMessages(messages) {
     /^Dowiedz się więcej$/i,
     /^Wprowadź kod PIN/i,
     /^Odpowiedz\??$/i,
+    /^Wy[śs]wietlona przez/i,
     /^\d{1,2}:\d{2}$/,
     /^(Pon|Wt|Śr|Sro|Czw|Pt|Sob|Nd|Niedz|Sun|Mon|Tue|Wed|Thu|Fri|Sat)[, ]+\d{1,2}:\d{2}$/i,
     /Powiadomienia push są wyłączone/i,
@@ -425,6 +443,16 @@ async function waitForSearchInput(page) {
 }
 
 async function clickConversation(page, target) {
+  if (target.id) {
+    const directUrl = `https://www.facebook.com/messages/t/${target.id}`;
+    try {
+      await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
+      return true;
+    } catch (err) {
+      console.warn(`Direct navigation to ${directUrl} failed, falling back to selectors`, err);
+    }
+  }
+
   const buildSelectors = () => {
     const candidates = [];
     if (target.id) {
@@ -677,10 +705,49 @@ async function readMessages(conversationName, limit = 5) {
     await maybeUnlockWithPin(page);
 
     await page.waitForTimeout(2000); // wait for messages to load
-    const messages = await page.$$eval('div[role="row"]', (rows, lim) => {
+    const rowSelectors = ['div[role="log"] div[role="row"]', 'div[role="main"] div[role="row"]'];
+    let rowSelector = rowSelectors[0];
+    for (const selector of rowSelectors) {
+      const count = await page.locator(selector).count();
+      if (count > 0) {
+        rowSelector = selector;
+        break;
+      }
+    }
+
+    const { messages, debugRows } = await page.$$eval(rowSelector, (rows, lim) => {
       const collected = [];
+      const debugRowIndexes = [];
+      const normalize = (value) => {
+        if (!value) return '';
+        return value
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .toLowerCase();
+      };
 
       const pickSender = (row) => {
+        const textEls = row.querySelectorAll('div[dir="auto"], span[dir="auto"]');
+        for (const el of textEls) {
+          const text = (el.textContent || '').trim();
+          const norm = normalize(text);
+          if (!text || norm.includes('wyslano') || norm.startsWith('wyswietlona przez')) continue;
+          const color = window.getComputedStyle(el).color.replace(/\s+/g, '');
+          if (color === 'rgb(255,255,255)' || color === 'rgba(255,255,255,1)') {
+            return 'me';
+          }
+          const fontSize = window.getComputedStyle(el).fontSize;
+          if (fontSize === '14px') return text;
+        }
+        for (const el of textEls) {
+          const text = (el.textContent || '').trim();
+          const norm = normalize(text);
+          if (norm.startsWith('wyswietlona przez') || norm.includes('wyslano') || norm.includes('dostarczono')) {
+            return 'me';
+          }
+        }
         const avatar = row.querySelector('img[alt]');
         if (avatar && avatar.getAttribute('alt')) {
           const alt = avatar.getAttribute('alt').trim();
@@ -693,15 +760,30 @@ async function readMessages(conversationName, limit = 5) {
         return raw;
       };
 
-      rows.forEach((row) => {
+      rows.forEach((row, rowIndex) => {
         const sender = pickSender(row);
         const textEls = row.querySelectorAll('div[dir="auto"], span[dir="auto"]');
         const texts = Array.from(textEls)
-          .map((n) => n.textContent.trim())
-          .filter(Boolean);
-        const filteredTexts = texts.filter((t) => t !== sender && !/wys[łl]ano/i.test(t));
+          .map((n) => ({
+            text: n.textContent.trim(),
+            fontSize: window.getComputedStyle(n).fontSize
+          }))
+          .filter((item) => item.text);
+        const filteredTexts = texts
+          .filter((item) => item.fontSize === '15px')
+          .map((item) => item.text)
+          .filter(
+            (t) =>
+              t !== sender &&
+              !/wys[łl]ano/i.test(t) &&
+              !/wy[śs]wietlona przez/i.test(t) &&
+              !/dostarczono/i.test(t)
+          );
         if (!filteredTexts.length) return;
         filteredTexts.forEach((text) => collected.push({ sender, text }));
+        if (!sender) {
+          debugRowIndexes.push(rowIndex);
+        }
       });
 
       // If earlier messages missed a sender but a newer one has it, assume they came from the same person.
@@ -724,8 +806,27 @@ async function readMessages(conversationName, limit = 5) {
         });
       }
 
-      return collected.slice(-lim);
+      return {
+        messages: collected.slice(-lim),
+        debugRows: debugRowIndexes.slice(-lim)
+      };
     }, limit);
+
+    if (watchDebugScreenshots && debugRows.length) {
+      await page.$$eval(
+        rowSelector,
+        (rows, highlightIndexes) => {
+          highlightIndexes.forEach((idx) => {
+            const row = rows[idx];
+            if (!row) return;
+            row.style.outline = '3px solid #ff3b30';
+            row.style.background = 'rgba(255, 59, 48, 0.08)';
+          });
+        },
+        debugRows
+      );
+      await captureWatchScreenshot(page, conversationName, 'missing-sender');
+    }
 
     const deduped = dedupeMessages(messages);
     const filtered = filterMessages(deduped);
@@ -800,16 +901,16 @@ function start() {
         name: watchConversationId ? null : watchConversation
       };
       const poll = async () => {
-        if (alreadyPolling) return;
-        alreadyPolling = true;
+        if (pollingState.get(watchTargetValue)) return;
+        pollingState.set(watchTargetValue, true);
         try {
           if (sendInProgress) {
-            alreadyPolling = false;
+            pollingState.set(watchTargetValue, false);
             return;
           }
           const messages = await readMessages(watchTargetValue, watchLimit);
           if (!messages || !messages.length) {
-            alreadyPolling = false;
+            pollingState.set(watchTargetValue, false);
             return;
           }
           const { newMessages, lastSeenKey } = diffMessages(lastSeen.get(watchTargetValue), messages);
@@ -820,9 +921,10 @@ function start() {
             await sendWatchWebhook(watchConversationRef, newMessages);
           }
           lastSeen.set(watchTargetValue, lastSeenKey);
-          alreadyPolling = false;
         } catch (err) {
           console.error('Watcher error', err);
+        } finally {
+          pollingState.set(watchTargetValue, false);
         }
       };
       poll();
