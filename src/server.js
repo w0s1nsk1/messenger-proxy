@@ -545,11 +545,14 @@ async function navigateToMessages(page) {
 
 async function maybeHandleContinueScreen(page) {
   const continueSelectors = ['button:has-text("Kontynuuj")', 'a:has-text("Kontynuuj")'];
+  
   for (const selector of continueSelectors) {
     const loc = page.locator(selector).first();
     if ((await loc.count()) === 0) continue;
+    console.log('Continue screen detected, attempting to proceed.');
     try {
       await loc.waitFor({ state: 'visible', timeout: 3000 });
+      console.log(`Clicking continue button: ${selector}`);
       await loc.click({ timeout: 5000 });
       await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
       return true;
