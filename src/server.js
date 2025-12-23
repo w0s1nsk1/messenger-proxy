@@ -536,10 +536,28 @@ async function clickConversation(page, target) {
 async function navigateToMessages(page) {
   try {
     await page.goto('https://m.facebook.com/messages', { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await maybeHandleContinueScreen(page);
   } catch (err) {
     console.warn('Navigation to messages hit timeout, continuing', err);
   }
   await maybeUnlockWithPin(page);
+}
+
+async function maybeHandleContinueScreen(page) {
+  const continueSelectors = ['button:has-text("Kontynuuj")', 'a:has-text("Kontynuuj")'];
+  for (const selector of continueSelectors) {
+    const loc = page.locator(selector).first();
+    if ((await loc.count()) === 0) continue;
+    try {
+      await loc.waitFor({ state: 'visible', timeout: 3000 });
+      await loc.click({ timeout: 5000 });
+      await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+      return true;
+    } catch {
+      continue;
+    }
+  }
+  return false;
 }
 
 function normalizeText(value) {
