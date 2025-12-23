@@ -5,7 +5,7 @@ const http = require('http');
 const https = require('https');
 const path = require('path');
 const { chromium } = require('playwright');
-const { persistMessages } = require('./sqlite');
+const { persistMessages, getLastMessageKey } = require('./sqlite');
 
 const pollingState = new Map();
 const app = express();
@@ -880,8 +880,6 @@ function start() {
       : [];
 
   if (watchTargets.length) {
-    const lastSeen = new Map();
-
     const startWatcher = (watchTargetValue) => {
       const watchConversationRef = {
         key: watchTargetValue,
@@ -901,14 +899,14 @@ function start() {
             pollingState.set(watchTargetValue, false);
             return;
           }
-          const { newMessages, lastSeenKey } = diffMessages(lastSeen.get(watchTargetValue), messages);
+          const dbLastSeenKey = await getLastMessageKey(watchConversationRef);
+          const { newMessages } = diffMessages(dbLastSeenKey, messages);
           if (newMessages.length) {
             console.log(newMessages);
             newMessages.forEach((m) => console.log(`[Incoming][${m.sender || watchTargetValue}] ${m.text}`));
             await persistMessages(watchConversationRef, newMessages);
             await sendWatchWebhook(watchConversationRef, newMessages);
           }
-          lastSeen.set(watchTargetValue, lastSeenKey);
         } catch (err) {
           console.error('Watcher error', err);
         } finally {

@@ -54,6 +54,15 @@ function run(db, sql, params = []) {
   });
 }
 
+function get(db, sql, params = []) {
+  return new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+}
+
 function normalizeConversationRef(ref) {
   if (!ref) return { key: null, id: null, name: null };
 
@@ -148,4 +157,30 @@ async function persistMessages(conversationRef, messages) {
   }
 }
 
-module.exports = { persistMessages };
+async function getLastMessageKey(conversationRef) {
+  if (!sqlitePath || sqliteDisabled) return null;
+  const normalizedConversation = normalizeConversationRef(conversationRef);
+  if (!normalizedConversation.key) return null;
+
+  try {
+    const db = await initDatabase();
+    if (!db) return null;
+
+    const row = await get(
+      db,
+      `SELECT sender, text
+       FROM messages
+       WHERE conversation_key = ?
+       ORDER BY id DESC
+       LIMIT 1`,
+      [normalizedConversation.key]
+    );
+    if (!row || !row.text) return null;
+    return `${row.sender || ''}:${row.text}`;
+  } catch (err) {
+    console.error('Failed to read last message from SQLite', err);
+    return null;
+  }
+}
+
+module.exports = { persistMessages, getLastMessageKey };
