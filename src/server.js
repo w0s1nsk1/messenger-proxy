@@ -781,42 +781,55 @@ function start() {
   });
 
   // Optional background watcher to log incoming messages from a conversation.
-  const watchTargetValue = watchConversationId || watchConversation;
-  if (watchTargetValue) {
-    const watchConversationRef = {
-      key: watchTargetValue,
-      id: watchConversationId || null,
-      name: watchConversation || null
-    };
+  const watchTargets = watchConversationId
+    ? watchConversationId
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
+    : watchConversation
+      ? [watchConversation]
+      : [];
+
+  if (watchTargets.length) {
     const lastSeen = new Map();
-    const poll = async () => {
-      if (alreadyPolling) return;
-      alreadyPolling = true;
-      try {
-        if (sendInProgress) {
+
+    const startWatcher = (watchTargetValue) => {
+      const watchConversationRef = {
+        key: watchTargetValue,
+        id: watchConversationId ? watchTargetValue : null,
+        name: watchConversationId ? null : watchConversation
+      };
+      const poll = async () => {
+        if (alreadyPolling) return;
+        alreadyPolling = true;
+        try {
+          if (sendInProgress) {
+            alreadyPolling = false;
+            return;
+          }
+          const messages = await readMessages(watchTargetValue, watchLimit);
+          if (!messages || !messages.length) {
+            alreadyPolling = false;
+            return;
+          }
+          const { newMessages, lastSeenKey } = diffMessages(lastSeen.get(watchTargetValue), messages);
+          if (newMessages.length) {
+            console.log(newMessages);
+            newMessages.forEach((m) => console.log(`[Incoming][${m.sender || watchTargetValue}] ${m.text}`));
+            await persistMessages(watchConversationRef, newMessages);
+            await sendWatchWebhook(watchConversationRef, newMessages);
+          }
+          lastSeen.set(watchTargetValue, lastSeenKey);
           alreadyPolling = false;
-          return;
+        } catch (err) {
+          console.error('Watcher error', err);
         }
-        const messages = await readMessages(watchTargetValue, watchLimit);
-        if (!messages || !messages.length) {
-          alreadyPolling = false;
-          return;
-        }
-        const { newMessages, lastSeenKey } = diffMessages(lastSeen.get(watchTargetValue), messages);
-        if (newMessages.length) {
-          console.log(newMessages);
-          newMessages.forEach((m) => console.log(`[Incoming][${m.sender || watchTargetValue}] ${m.text}`));
-          await persistMessages(watchConversationRef, newMessages);
-          await sendWatchWebhook(watchConversationRef, newMessages);
-        }
-        lastSeen.set(watchTargetValue, lastSeenKey);
-        alreadyPolling = false;
-      } catch (err) {
-        console.error('Watcher error', err);
-      }
+      };
+      poll();
+      setInterval(poll, watchPollMs);
     };
-    poll();
-    setInterval(poll, watchPollMs);
+
+    watchTargets.forEach(startWatcher);
   }
 
   async function shutdown() {
