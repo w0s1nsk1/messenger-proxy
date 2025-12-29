@@ -7,7 +7,6 @@ const path = require('path');
 const { chromium } = require('playwright');
 const { persistMessages, getLastMessageKey } = require('./sqlite');
 
-const pollingState = new Map();
 const app = express();
 const port = process.env.PORT || 3000;
 const fbEmail = process.env.FB_EMAIL;
@@ -918,44 +917,41 @@ function start() {
       : [];
 
   if (watchTargets.length) {
-    const startWatcher = (watchTargetValue) => {
+    let watchIndex = 0;
+    let watchInProgress = false;
+
+    const pollNext = async () => {
+      if (watchInProgress) return;
+      const watchTargetValue = watchTargets[watchIndex];
+      watchIndex = (watchIndex + 1) % watchTargets.length;
       const watchConversationRef = {
         key: watchTargetValue,
         id: watchConversationId ? watchTargetValue : null,
         name: watchConversationId ? null : watchConversation
       };
-      const poll = async () => {
-        if (pollingState.get(watchTargetValue)) return;
-        pollingState.set(watchTargetValue, true);
-        try {
-          if (sendInProgress) {
-            pollingState.set(watchTargetValue, false);
-            return;
-          }
-          const messages = await readMessages(watchTargetValue, watchLimit);
-          if (!messages || !messages.length) {
-            pollingState.set(watchTargetValue, false);
-            return;
-          }
-          const dbLastSeenKey = await getLastMessageKey(watchConversationRef);
-          const { newMessages } = diffMessages(dbLastSeenKey, messages);
-          if (newMessages.length) {
-            console.log(newMessages);
-            newMessages.forEach((m) => console.log(`[Incoming][${m.sender || watchTargetValue}] ${m.text}`));
-            await persistMessages(watchConversationRef, newMessages);
-            await sendWatchWebhook(watchConversationRef, newMessages);
-          }
-        } catch (err) {
-          console.error('Watcher error', err);
-        } finally {
-          pollingState.set(watchTargetValue, false);
+
+      watchInProgress = true;
+      try {
+        if (sendInProgress) return;
+        const messages = await readMessages(watchTargetValue, watchLimit);
+        if (!messages || !messages.length) return;
+        const dbLastSeenKey = await getLastMessageKey(watchConversationRef);
+        const { newMessages } = diffMessages(dbLastSeenKey, messages);
+        if (newMessages.length) {
+          console.log(newMessages);
+          newMessages.forEach((m) => console.log(`[Incoming][${m.sender || watchTargetValue}] ${m.text}`));
+          await persistMessages(watchConversationRef, newMessages);
+          await sendWatchWebhook(watchConversationRef, newMessages);
         }
-      };
-      poll();
-      setInterval(poll, watchPollMs);
+      } catch (err) {
+        console.error('Watcher error', err);
+      } finally {
+        watchInProgress = false;
+      }
     };
 
-    watchTargets.forEach(startWatcher);
+    pollNext();
+    setInterval(pollNext, watchPollMs);
   }
 
   async function shutdown() {
