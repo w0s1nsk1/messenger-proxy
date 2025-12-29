@@ -22,6 +22,7 @@ const watchPollMs = Number(process.env.WATCH_POLL_MS) || 10000;
 const watchLimit = Number(process.env.WATCH_LIMIT) || 10;
 const watchWebhookUrl = process.env.WATCH_WEBHOOK_URL;
 const watchDebugScreenshots = (process.env.WATCH_DEBUG_SCREENSHOTS || '').toLowerCase() === 'true';
+const headless = (process.env.HEADLESS || 'true').toLowerCase() !== 'false';
 const errorScreenshotDir =
   process.env.ERROR_SCREENSHOT_DIR || path.resolve(process.cwd(), 'storage', 'screenshots');
 
@@ -125,7 +126,7 @@ async function ensureLoggedIn() {
 
   const storageAvailable = storageStatePath && fs.existsSync(storageStatePath);
 
-  browser = await chromium.launch({ headless: true });
+  browser = await chromium.launch({ headless });
 
   if (storageAvailable) {
     context = await browser.newContext({ storageState: storageStatePath });
@@ -536,25 +537,39 @@ async function clickConversation(page, target) {
 async function navigateToMessages(page) {
   try {
     await page.goto('https://m.facebook.com/messages', { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await maybeHandleContinueScreen(page);
   } catch (err) {
     console.warn('Navigation to messages hit timeout, continuing', err);
   }
+  await maybeHandleContinueScreen(page);
   await maybeUnlockWithPin(page);
 }
 
 async function maybeHandleContinueScreen(page) {
-  const continueSelectors = ['button:has-text("Kontynuuj")', 'a:has-text("Kontynuuj")'];
-  
+  const continueSelectors = [
+    'span:has-text("Kontynuuj")',
+    'span:has-text("Continue")', 
+  ];
   for (const selector of continueSelectors) {
     const loc = page.locator(selector).first();
-    if ((await loc.count()) === 0) continue;
     console.log('Continue screen detected, attempting to proceed.');
     try {
       await loc.waitFor({ state: 'visible', timeout: 3000 });
       console.log(`Clicking continue button: ${selector}`);
       await loc.click({ timeout: 5000 });
       await page.waitForLoadState('domcontentloaded', { timeout: 10000 });
+      return true;
+    } catch {
+      continue;
+    }
+  }
+
+  const otherProfileSelectors = ['button:has-text("Użyj innego profilu")', 'a:has-text("Użyj innego profilu")'];
+  for (const selector of otherProfileSelectors) {
+    const loc = page.locator(selector).first();
+    if ((await loc.count()) === 0) continue;
+    console.log(`Continue screen detected with other profile option: ${selector}`);
+    try {
+      await loc.waitFor({ state: 'visible', timeout: 3000 });
       return true;
     } catch {
       continue;
@@ -839,6 +854,10 @@ async function readMessages(conversationName, limit = 5) {
 
     const deduped = dedupeMessages(messages);
     const filtered = filterMessages(deduped);
+    if (messages.length === 0 || filtered.length === 0) {
+      console.log(`No messages to filter for conversation: ${conversationName}, taking screenshot, check if there is an issue.`);
+      await captureWatchScreenshot(page, conversationName, 'all-messages-filtered');
+    }
     console.log(
       `Read ${messages.length} messages from "${conversationName}" (deduped to ${deduped.length}, filtered ${
         deduped.length - filtered.length
@@ -863,20 +882,18 @@ async function readMessages(conversationName, limit = 5) {
 
 async function sendWatchWebhook(conversationRef, messages) {
   if (!watchWebhookUrl || !messages || !messages.length) return;
-  for (const message of messages) {
-    const payload = {
-      conversation: {
-        key: conversationRef.key,
-        id: conversationRef.id,
-        name: conversationRef.name
-      },
-      message
-    };
-    try {
-      await postJson(watchWebhookUrl, payload);
-    } catch (err) {
-      console.error('Failed to deliver watch webhook payload', err);
-    }
+  const payload = {
+    conversation: {
+      key: conversationRef.key,
+      id: conversationRef.id,
+      name: conversationRef.name
+    },
+    messages
+  };
+  try {
+    await postJson(watchWebhookUrl, payload);
+  } catch (err) {
+    console.error('Failed to deliver watch webhook payload', err);
   }
 }
 
